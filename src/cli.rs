@@ -14,6 +14,7 @@ pub struct Cli {
 pub enum RInputCommand {
     Record(Record),
     Replay(Replay),
+    Generate(Generate),
 }
 
 #[derive(Debug, Args)]
@@ -38,6 +39,31 @@ pub struct Replay {
     pub source: String,
     #[arg(short, long, help = "Scaling factor for time", default_value_t = 1.0)]
     pub factor: f32,
+    #[arg(
+        short = 'q',
+        long,
+        help = "Send sequence on term input. if false, run once"
+    )]
+    pub sequence: bool,
+}
+
+#[derive(Debug, Args)]
+#[command(
+    arg_required_else_help = true,
+    about = "Replay input events from a source file, you might need to run with \"sudo\""
+)]
+pub struct Generate {
+    #[arg(short, long, help = "Filepath to save JSON output to")]
+    pub output: Option<String>,
+    #[arg(short, long, help = "Filepath to source for event timeline")]
+    pub source: String,
+    #[arg(
+        short,
+        long,
+        help = "Time delta for each event",
+        default_value_t = 1000
+    )]
+    pub delta: u64,
     #[arg(
         short = 'q',
         long,

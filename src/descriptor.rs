@@ -1,3 +1,4 @@
+use anyhow::{Ok, Result};
 use evdev::{
     uinput::{VirtualDevice, VirtualDeviceBuilder},
     AttributeSet, AttributeSetRef, Device, EvdevEnum, EventType, InputEvent, Key,
@@ -78,6 +79,23 @@ pub struct DeviceDescriptor {
     leds: Option<Vec<u16>>,
     sounds: Option<Vec<u16>>,
     ff: Option<Vec<u16>>,
+}
+
+pub fn create_device_descriptor(keys: Vec<Key>) -> Result<DeviceDescriptor> {
+    let events = vec![0, 1, 2, 3, 4, 17, 20];
+    let k: Vec<u16> = keys.iter().map(|el| el.0).collect();
+    let desc = DeviceDescriptor {
+        events: events,
+        keys: Some(k),
+        relative_axes: None,
+        absolute_axes: None,
+        switches: None,
+        leds: None,
+        sounds: None,
+        ff: None,
+    };
+
+    Ok(desc)
 }
 
 fn flatten_attr_set<T>(set: Option<&AttributeSetRef<T>>) -> Option<Vec<u16>>

@@ -1,18 +1,21 @@
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use clap::Parser;
+use descriptor::{create_device_descriptor, EventDescriptor};
 use evdev::uinput::VirtualDevice;
-use std::result::Result::Ok;
+use generate::parse_file;
 use std::{fs::File, process::exit};
 mod cli;
 mod descriptor;
+mod generate;
 mod record;
 mod replay;
+mod utils;
 
 use crate::descriptor::{Recording, Timeline};
 use crate::record::start_recording;
 use crate::replay::{replay_in_loop, replay_timeline};
-use cli::{pick_device, Cli, RInputCommand, Record, Replay};
-use record::get_devices;
+use cli::{pick_device, Cli, Generate, RInputCommand, Record, Replay};
+use record::{get_devices, write_to_file};
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -21,6 +24,7 @@ fn main() -> Result<()> {
     if (match args.command {
         RInputCommand::Record(rec) => process_record(rec),
         RInputCommand::Replay(rep) => process_replay(rep),
+        RInputCommand::Generate(gen) => process_generate(gen),
     })
     .is_ok()
     {
@@ -75,6 +79,58 @@ fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
     let timeline: Timeline = rec.event_list.into();
 
     if rep.sequence {
+        replay_in_loop(&mut device, &timeline)?;
+    } else {
+        replay_timeline(&mut device, &timeline)?;
+    }
+
+    Ok(())
+}
+
+fn process_generate(gen: Generate) -> Result<()> {
+    // Iterate line by line
+    let keys = parse_file(gen.source)?;
+
+    // Generate device that can submit keys
+    let desc = create_device_descriptor(keys.clone())?;
+
+    // Create Recording
+    let mut rec = Recording {
+        device: desc,
+        event_list: Vec::new(),
+    };
+
+    for t in keys.iter().enumerate() {
+        let delta = gen.delta * (t.0 as u64 + 2);
+        let key = t.1;
+        //Down
+        rec.event_list
+            .push(EventDescriptor::new(delta.into(), 1, key.0, 1));
+        //Up
+        rec.event_list.push(EventDescriptor::new(
+            (delta as f64 * 1.1).ceil() as u128,
+            1,
+            key.0,
+            0,
+        ));
+    }
+
+    if gen.output.is_some() {
+        let file = File::create(gen.output.unwrap())?;
+        write_to_file(rec.clone(), file)?;
+    }
+
+    // Play recording
+    let device = VirtualDevice::try_from(rec.device);
+    if device.is_err() {
+        println!("You probably need to run this with sudo permissions");
+        exit(1);
+    }
+    let mut device = device.unwrap();
+
+    let timeline: Timeline = rec.event_list.into();
+
+    if gen.sequence {
         replay_in_loop(&mut device, &timeline)?;
     } else {
         replay_timeline(&mut device, &timeline)?;
