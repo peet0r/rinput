@@ -10,7 +10,7 @@ mod replay;
 
 use crate::descriptor::{Recording, Timeline};
 use crate::record::start_recording;
-use crate::replay::start_replaying;
+use crate::replay::{replay_in_loop, replay_timeline};
 use cli::{pick_device, Cli, RInputCommand, Record, Replay};
 use record::get_devices;
 
@@ -70,11 +70,15 @@ fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
         println!("You probably need to run this with sudo permissions");
         exit(1);
     }
-    let device = device.unwrap();
+    let mut device = device.unwrap();
 
     let timeline: Timeline = rec.event_list.into();
 
-    start_replaying(device, timeline)?;
+    if rep.sequence {
+        replay_in_loop(&mut device, &timeline)?;
+    } else {
+        replay_timeline(&mut device, &timeline)?;
+    }
 
     Ok(())
 }

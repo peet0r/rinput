@@ -38,6 +38,12 @@ pub struct Replay {
     pub source: String,
     #[arg(short, long, help = "Scaling factor for time", default_value_t = 1.0)]
     pub factor: f32,
+    #[arg(
+        short = 'q',
+        long,
+        help = "Send sequence on term input. if false, run once"
+    )]
+    pub sequence: bool,
 }
 
 pub fn pick_device(list: Vec<(String, String)>) -> String {
