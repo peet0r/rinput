@@ -85,7 +85,7 @@ pub fn create_device_descriptor(keys: Vec<Key>) -> Result<DeviceDescriptor> {
     let events = vec![0, 1, 2, 3, 4, 17, 20];
     let k: Vec<u16> = keys.iter().map(|el| el.0).collect();
     let desc = DeviceDescriptor {
-        events: events,
+        events,
         keys: Some(k),
         relative_axes: None,
         absolute_axes: None,

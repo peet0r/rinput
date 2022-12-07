@@ -1,7 +1,7 @@
 use crate::descriptor::{DeviceDescriptor, EventDescriptor, Recording};
 use anyhow::Result;
 use console::Term;
-use evdev::{enumerate, Device, EventType, InputEventKind, Key};
+use evdev::{enumerate, Device, InputEvent, InputEventKind, Key};
 use std::process;
 use std::{fs::File, time::Instant};
 
@@ -19,67 +19,34 @@ pub fn get_devices() -> Vec<(String, String)> {
 }
 
 pub fn start_recording(device_path: String, outputfile: File) -> Result<()> {
-    let term = Term::stdout();
-
     // Create device
     let mut device = Device::open(&device_path)?;
 
     // Setup file writer
-    // Write header to file
     let mut j = Recording::new(DeviceDescriptor::from(&device));
 
     // Record Event Time
     let init_time = Instant::now();
 
-    let mut esc_pressed = false;
-    let mut lctrl_pressed = false;
-    term.write_line("Recording events from device, press ESC and Left-CTRL to save and exit")?;
-    term.write_line(&format!(
-        "left-ctrl: {} esc: {}",
-        lctrl_pressed, esc_pressed
-    ))?;
+    let mut controller = LoopController::new();
+
     // Loop
     loop {
         for event in device.fetch_events()? {
             let event_timestamp = init_time.elapsed();
-            // Parse event into relavent data
-            match event.event_type() {
-                EventType::KEY => {
-                    if event.kind() == InputEventKind::Key(Key::KEY_ESC) {
-                        if event.value() == 0 {
-                            esc_pressed = false;
-                        } else {
-                            esc_pressed = true;
-                        }
-                    }
 
-                    if event.kind() == InputEventKind::Key(Key::KEY_LEFTCTRL) {
-                        if event.value() == 0 {
-                            lctrl_pressed = false;
-                        } else {
-                            lctrl_pressed = true;
-                        }
-                    }
-                    term.clear_last_lines(1)?;
-                    term.write_line(&format!(
-                        "left-ctrl: {} esc: {}",
-                        lctrl_pressed, esc_pressed
-                    ))?;
-                    if lctrl_pressed && esc_pressed {
-                        write_to_file(j, outputfile)?;
-                        process::exit(1);
-                    }
-
-                    j.event_list.push(EventDescriptor::new(
-                        event_timestamp.as_millis(),
-                        event.event_type().0,
-                        event.code(),
-                        event.value(),
-                    ));
-                }
-                _ => (),
+            if controller.should_exit(event)? {
+                write_to_file(j, outputfile)?;
+                process::exit(1);
             }
-            // Append to file
+
+            // Parse event into relavent data
+            j.event_list.push(EventDescriptor::new(
+                event_timestamp.as_millis(),
+                event.event_type().0,
+                event.code(),
+                event.value(),
+            ));
         }
     }
 }
@@ -87,4 +54,49 @@ pub fn start_recording(device_path: String, outputfile: File) -> Result<()> {
 pub fn write_to_file(rec: Recording, outputfile: File) -> Result<()> {
     serde_json::to_writer(outputfile, &rec)?;
     Ok(())
+}
+
+struct LoopController {
+    esc_keystate: bool,
+    left_control_keystate: bool,
+    term: Term,
+}
+
+impl LoopController {
+    fn new() -> Self {
+        let term = Term::stdout();
+
+        term.write_line("Recording events from device, press ESC and Left-CTRL to save and exit")
+            .unwrap();
+
+        LoopController {
+            esc_keystate: false,
+            left_control_keystate: false,
+            term,
+        }
+    }
+    fn should_exit(&mut self, event: InputEvent) -> Result<bool> {
+        if event.kind() == InputEventKind::Key(Key::KEY_ESC) {
+            if event.value() == 0 {
+                self.esc_keystate = false;
+            } else {
+                self.esc_keystate = true;
+            }
+        }
+
+        if event.kind() == InputEventKind::Key(Key::KEY_LEFTCTRL) {
+            if event.value() == 0 {
+                self.left_control_keystate = false;
+            } else {
+                self.left_control_keystate = true;
+            }
+        }
+        self.term.clear_last_lines(1)?;
+        self.term.write_line(&format!(
+            "esc: {} left-ctrl: {}",
+            self.esc_keystate, self.left_control_keystate
+        ))?;
+
+        Ok(self.esc_keystate && self.left_control_keystate)
+    }
 }
