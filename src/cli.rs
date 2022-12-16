@@ -72,6 +72,7 @@ pub struct Generate {
     pub sequence: bool,
 }
 
+// TODO: This should be a result
 pub fn pick_device(list: Vec<(String, String)>) -> String {
     let names: Vec<String> = list.iter().map(|t| t.1.clone()).collect();
 

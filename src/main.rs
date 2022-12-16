@@ -17,14 +17,15 @@ use crate::replay::{replay_in_loop, replay_timeline};
 use cli::{pick_device, Cli, Generate, RInputCommand, Record, Replay};
 use record::{get_devices, write_to_file};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Cli::parse();
 
     println!("WARNING: This tool currently only works for key events");
     if (match args.command {
-        RInputCommand::Record(rec) => process_record(rec),
-        RInputCommand::Replay(rep) => process_replay(rep),
-        RInputCommand::Generate(gen) => process_generate(gen),
+        RInputCommand::Record(rec) => process_record(rec).await,
+        RInputCommand::Replay(rep) => process_replay(rep).await,
+        RInputCommand::Generate(gen) => process_generate(gen).await,
     })
     .is_ok()
     {
@@ -36,7 +37,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_record(rec: Record) -> Result<(), anyhow::Error> {
+async fn process_record(rec: Record) -> Result<(), anyhow::Error> {
     if rec.enumerate {
         println!("run enumerate and exit");
         for device in get_devices().iter() {
@@ -64,7 +65,7 @@ fn process_record(rec: Record) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
+async fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
     println!("{:?}", rep);
 
     // Deserialize JSON file
@@ -87,7 +88,7 @@ fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn process_generate(gen: Generate) -> Result<()> {
+async fn process_generate(gen: Generate) -> Result<()> {
     // Iterate line by line
     let keys = parse_file(gen.source)?;
 
