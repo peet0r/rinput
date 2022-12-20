@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
 use console::Term;
 use dialoguer::{theme::ColorfulTheme, Select};
@@ -73,20 +74,19 @@ pub struct Generate {
 }
 
 // TODO: This should be a result
-pub fn pick_device(list: Vec<(String, String)>) -> String {
+pub fn pick_device(list: Vec<(String, String)>) -> Result<String> {
     let names: Vec<String> = list.iter().map(|t| t.1.clone()).collect();
 
     let selection = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("Select a device to record from:")
         .items(&names)
         .default(0)
-        .interact_on_opt(&Term::stderr())
+        .interact_on_opt(&Term::stdout())
         .unwrap();
 
     if let Some(i) = selection {
-        println!("Selection: {}", i);
-        list[i].0.clone()
+        Ok(list[i].0.clone())
     } else {
-        "error".to_string()
+        Err(anyhow!("Not a valid selection"))
     }
 }
