@@ -1,11 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::Parser;
 use console::{Style, Term};
 use descriptor::{create_device_descriptor, EventDescriptor};
 use evdev::uinput::VirtualDevice;
 use generate::parse_file;
-use std::path::Path;
-use std::{fs::File, process::exit};
+use std::process::exit;
 use tokio::sync::mpsc;
 mod cli;
 mod descriptor;
@@ -15,13 +14,9 @@ mod replay;
 mod utils;
 
 use crate::descriptor::{Recording, Timeline};
-use crate::record::start_recording;
 use crate::replay::{replay_in_loop, replay_timeline};
-use cli::{pick_device, Cli, Generate, RInputCommand, Record, Replay};
-use record::{
-    enumerate_devices, get_devices, listen_loop, record_loop, select_device, validate_path,
-    write_to_file,
-};
+use cli::{Cli, Generate, RInputCommand, Record, Replay};
+use record::{enumerate_devices, listen_loop, record_loop, select_device, validate_path, Msg};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,15 +69,16 @@ async fn process_record(rec: Record) -> Result<()> {
 
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.unwrap();
-        // Your handler here
-        exit.send(0).await.expect("could not send exit command");
+        exit.send(Msg::Exit)
+            .await
+            .expect("could not send exit command");
     });
 
-    let listen_handle = tokio::spawn(listen_loop(tx, device_path));
+    let _ = tokio::spawn(listen_loop(tx, device_path));
 
     let record_handle = tokio::spawn(record_loop(rx, output_path));
 
-    futures::future::join_all([listen_handle, record_handle]).await;
+    let _ = record_handle.await?;
 
     Ok(())
 }
@@ -136,11 +132,6 @@ async fn process_generate(gen: Generate) -> Result<()> {
             key.0,
             0,
         ));
-    }
-
-    if gen.output.is_some() {
-        let file = File::create(gen.output.unwrap())?;
-        write_to_file(rec.clone(), file)?;
     }
 
     // Play recording

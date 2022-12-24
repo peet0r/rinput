@@ -2,13 +2,19 @@ use crate::cli::pick_device;
 use crate::descriptor::{DeviceDescriptor, EventDescriptor, Recording};
 use anyhow::{anyhow, Result};
 use console::Term;
-use evdev::{enumerate, Device, InputEvent, InputEventKind, Key};
-use libc::exit;
+use evdev::{enumerate, Device};
+use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process;
+
 use std::time::SystemTime;
-use std::{fs::File, time::Instant};
 use tokio::sync::mpsc::{Receiver, Sender};
+
+#[derive(Debug)]
+pub enum Msg {
+    Exit,
+    Event(EventDescriptor),
+    Device(DeviceDescriptor),
+}
 
 // Returns (path, device name)
 pub fn get_devices() -> Result<Vec<(String, String)>> {
@@ -21,7 +27,7 @@ pub fn get_devices() -> Result<Vec<(String, String)>> {
         })
         .collect::<Vec<_>>();
 
-    if devices.len() == 0 {
+    if devices.is_empty() {
         return Err(anyhow!("No devices detected"));
     }
 
@@ -42,7 +48,7 @@ pub fn enumerate_devices() -> Result<()> {
 pub fn select_device() -> Result<String> {
     let devices = get_devices()?;
 
-    return pick_device(devices);
+    pick_device(devices)
 }
 
 pub fn validate_path(output: String) -> Result<PathBuf> {
@@ -54,23 +60,25 @@ pub fn validate_path(output: String) -> Result<PathBuf> {
         }
     }
 
-    if path.exists() == true {
+    if path.exists() {
         return Err(anyhow!("output file already exists"));
     }
 
     Ok(path.to_path_buf())
 }
 
-pub async fn listen_loop(tx: Sender<i64>, device_path: String) -> Result<()> {
+pub async fn listen_loop(tx: Sender<Msg>, device_path: String) -> Result<()> {
     let term = Term::stdout();
 
     // Create device
     let device = Device::open(&device_path)?;
+    let d: DeviceDescriptor = device.into();
+    // tx.send(Msg::Device(device.into().clone()));
 
     // Record Event Time
     let now = SystemTime::now();
 
-    let mut event_index: i64 = 1;
+    let mut event_index: u64 = 1;
     // TODO: Validate that this is correct Tokio async stream for events
     let mut events = device.into_event_stream()?;
     term.write_line("")?;
@@ -84,23 +92,38 @@ pub async fn listen_loop(tx: Sender<i64>, device_path: String) -> Result<()> {
             ev.value(),
         );
 
-        tx.send(event_index).await?;
+        tx.send(Msg::Event(desc.clone())).await?;
         term.clear_last_lines(1)?;
         term.write_line(&format!("{} Event: {:?}", event_index, desc))?;
         event_index += 1;
     }
 }
 
-pub async fn record_loop(mut rx: Receiver<i64>, output: PathBuf) -> Result<()> {
+pub async fn record_loop(mut rx: Receiver<Msg>, output: PathBuf) -> Result<()> {
     let term = Term::stdout();
+    let mut device: Option<DeviceDescriptor> = None;
+    let mut events: Vec<EventDescriptor> = Vec::new();
 
     // Make a File
     while let Some(i) = rx.recv().await {
         match i {
-            0 => {
-                term.write_line("Exit")?;
+            Msg::Exit => {
+                term.write_line("Exit Command Received")?;
+                let rec = Recording {
+                    event_list: events,
+                    device: device.unwrap(),
+                };
+                write_to_file(output, rec)?;
+                return Ok(());
             }
-            _ => continue,
+            Msg::Event(value) => {
+                // If verbose?
+                term.write_line(&format!("Event: {:?}", value))?;
+                events.push(value);
+            }
+            Msg::Device(dev) => {
+                device = Some(dev);
+            }
         }
         // Wait for events and write them to file...?
     }
@@ -108,85 +131,11 @@ pub async fn record_loop(mut rx: Receiver<i64>, output: PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn start_recording(device_path: String, outputfile: File) -> Result<()> {
-    // Create device
-    let mut device = Device::open(&device_path)?;
+pub fn write_to_file(output: PathBuf, rec: Recording) -> Result<()> {
+    let term = Term::stdout();
+    term.write_line(format!("Writing to file: {:?}", output).as_str())?;
+    let file = File::open(output)?;
+    serde_json::to_writer(file, &rec);
 
-    // Setup file writer
-    let mut j = Recording::new(DeviceDescriptor::from(&device));
-
-    // Record Event Time
-    let init_time = Instant::now();
-
-    let mut controller = LoopController::new();
-
-    // Loop
-    loop {
-        for event in device.fetch_events()? {
-            let event_timestamp = init_time.elapsed();
-
-            if controller.should_exit(event)? {
-                write_to_file(j, outputfile)?;
-                process::exit(1);
-            }
-
-            // Parse event into relavent data
-            j.event_list.push(EventDescriptor::new(
-                event_timestamp.as_millis(),
-                event.event_type().0,
-                event.code(),
-                event.value(),
-            ));
-        }
-    }
-}
-
-pub fn write_to_file(rec: Recording, outputfile: File) -> Result<()> {
-    serde_json::to_writer(outputfile, &rec)?;
     Ok(())
-}
-
-struct LoopController {
-    esc_keystate: bool,
-    left_control_keystate: bool,
-    term: Term,
-}
-
-impl LoopController {
-    fn new() -> Self {
-        let term = Term::stdout();
-
-        term.write_line("Recording events from device, press ESC and Left-CTRL to save and exit")
-            .unwrap();
-
-        LoopController {
-            esc_keystate: false,
-            left_control_keystate: false,
-            term,
-        }
-    }
-    fn should_exit(&mut self, event: InputEvent) -> Result<bool> {
-        if event.kind() == InputEventKind::Key(Key::KEY_ESC) {
-            if event.value() == 0 {
-                self.esc_keystate = false;
-            } else {
-                self.esc_keystate = true;
-            }
-        }
-
-        if event.kind() == InputEventKind::Key(Key::KEY_LEFTCTRL) {
-            if event.value() == 0 {
-                self.left_control_keystate = false;
-            } else {
-                self.left_control_keystate = true;
-            }
-        }
-        self.term.clear_last_lines(1)?;
-        self.term.write_line(&format!(
-            "esc: {} left-ctrl: {}",
-            self.esc_keystate, self.left_control_keystate
-        ))?;
-
-        Ok(self.esc_keystate && self.left_control_keystate)
-    }
 }
