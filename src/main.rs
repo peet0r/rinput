@@ -1,9 +1,11 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use clap::Parser;
+use console::{Style, Term};
 use descriptor::{create_device_descriptor, EventDescriptor};
 use evdev::uinput::VirtualDevice;
 use generate::parse_file;
-use std::{fs::File, process::exit};
+use std::process::exit;
+use tokio::sync::mpsc;
 mod cli;
 mod descriptor;
 mod generate;
@@ -12,59 +14,76 @@ mod replay;
 mod utils;
 
 use crate::descriptor::{Recording, Timeline};
-use crate::record::start_recording;
 use crate::replay::{replay_in_loop, replay_timeline};
-use cli::{pick_device, Cli, Generate, RInputCommand, Record, Replay};
-use record::{get_devices, write_to_file};
+use cli::{Cli, Generate, RInputCommand, Record, Replay};
+use record::{enumerate_devices, listen_loop, record_loop, select_device, validate_path, Msg};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Cli::parse();
 
-    println!("WARNING: This tool currently only works for key events");
-    if (match args.command {
-        RInputCommand::Record(rec) => process_record(rec),
-        RInputCommand::Replay(rep) => process_replay(rep),
-        RInputCommand::Generate(gen) => process_generate(gen),
-    })
-    .is_ok()
-    {
-        println!("Finished: OK");
+    // Term utils could be moved to a util
+    let term = Term::stdout();
+    let yellow = Style::new().yellow();
+    term.write_line(&format!(
+        "{} This tool only works for KEY events",
+        yellow.apply_to("WARNING:")
+    ))?;
+
+    let res = match args.command {
+        RInputCommand::Record(rec) => process_record(rec).await,
+        RInputCommand::Replay(rep) => process_replay(rep).await,
+        RInputCommand::Generate(gen) => process_generate(gen).await,
+    };
+
+    if res.is_ok() {
+        let green = Style::new().green();
+        term.write_line(&format!("Finished: {}", green.apply_to("OK")))?;
     } else {
-        println!("Finished: Error")
+        let red = Style::new().red();
+        term.write_line(&format!(
+            "{} : {}",
+            red.apply_to("ERROR:"),
+            res.err().unwrap()
+        ))?;
+        term.write_line("Exiting")?;
     }
 
     Ok(())
 }
 
-fn process_record(rec: Record) -> Result<(), anyhow::Error> {
+async fn process_record(rec: Record) -> Result<()> {
+    // If enumerate, display devices and exit
     if rec.enumerate {
-        println!("run enumerate and exit");
-        for device in get_devices().iter() {
-            println!("{:?}", device);
-        }
-        exit(0);
+        enumerate_devices()?;
+        return Ok(());
     }
 
     // Check that output file path is valid
-    if rec.output.is_none() {
-        println!("Output Path is not provided");
-        //TODO: this is a crappy error
-        exit(1);
-    }
+    let output_path = validate_path(rec.output.unwrap())?;
 
-    let f = File::create(rec.output.unwrap().as_str())?;
+    let device_path = select_device()?;
+    let (tx, rx) = mpsc::channel(100);
 
-    // Get desired device from user
-    let devices = get_devices();
-    let device_path = pick_device(devices);
-    println!("Initializing device at: {:?}", device_path);
+    let exit = tx.clone();
 
-    start_recording(device_path, f)?;
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        exit.send(Msg::Exit)
+            .await
+            .expect("could not send exit command");
+    });
+
+    let _ = tokio::spawn(listen_loop(tx, device_path));
+
+    let record_handle = tokio::spawn(record_loop(rx, output_path));
+
+    let _ = record_handle.await?;
 
     Ok(())
 }
 
-fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
+async fn process_replay(rep: Replay) -> Result<()> {
     println!("{:?}", rep);
 
     // Deserialize JSON file
@@ -87,7 +106,7 @@ fn process_replay(rep: Replay) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn process_generate(gen: Generate) -> Result<()> {
+async fn process_generate(gen: Generate) -> Result<()> {
     // Iterate line by line
     let keys = parse_file(gen.source)?;
 
@@ -113,11 +132,6 @@ fn process_generate(gen: Generate) -> Result<()> {
             key.0,
             0,
         ));
-    }
-
-    if gen.output.is_some() {
-        let file = File::create(gen.output.unwrap())?;
-        write_to_file(rec.clone(), file)?;
     }
 
     // Play recording

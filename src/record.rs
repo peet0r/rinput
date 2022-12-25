@@ -1,11 +1,23 @@
+use crate::cli::pick_device;
 use crate::descriptor::{DeviceDescriptor, EventDescriptor, Recording};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use console::Term;
-use evdev::{enumerate, Device, InputEvent, InputEventKind, Key};
-use std::process;
-use std::{fs::File, time::Instant};
+use evdev::{enumerate, Device};
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
-pub fn get_devices() -> Vec<(String, String)> {
+use std::time::SystemTime;
+use tokio::sync::mpsc::{Receiver, Sender};
+
+#[derive(Debug)]
+pub enum Msg {
+    Exit,
+    Event(EventDescriptor),
+    Device(DeviceDescriptor),
+}
+
+// Returns (path, device name)
+pub fn get_devices() -> Result<Vec<(String, String)>> {
     let mut devices = enumerate()
         .map(|t| {
             (
@@ -14,89 +26,113 @@ pub fn get_devices() -> Vec<(String, String)> {
             )
         })
         .collect::<Vec<_>>();
-    devices.reverse();
-    devices
-}
 
-pub fn start_recording(device_path: String, outputfile: File) -> Result<()> {
-    // Create device
-    let mut device = Device::open(&device_path)?;
-
-    // Setup file writer
-    let mut j = Recording::new(DeviceDescriptor::from(&device));
-
-    // Record Event Time
-    let init_time = Instant::now();
-
-    let mut controller = LoopController::new();
-
-    // Loop
-    loop {
-        for event in device.fetch_events()? {
-            let event_timestamp = init_time.elapsed();
-
-            if controller.should_exit(event)? {
-                write_to_file(j, outputfile)?;
-                process::exit(1);
-            }
-
-            // Parse event into relavent data
-            j.event_list.push(EventDescriptor::new(
-                event_timestamp.as_millis(),
-                event.event_type().0,
-                event.code(),
-                event.value(),
-            ));
-        }
+    if devices.is_empty() {
+        return Err(anyhow!("No devices detected"));
     }
+
+    devices.reverse();
+    Ok(devices)
 }
 
-pub fn write_to_file(rec: Recording, outputfile: File) -> Result<()> {
-    serde_json::to_writer(outputfile, &rec)?;
+// List devices
+pub fn enumerate_devices() -> Result<()> {
+    let devices = get_devices()?;
+
+    for (_, dev) in devices {
+        println!("{}", dev);
+    }
     Ok(())
 }
 
-struct LoopController {
-    esc_keystate: bool,
-    left_control_keystate: bool,
-    term: Term,
+pub fn select_device() -> Result<String> {
+    let devices = get_devices()?;
+
+    pick_device(devices)
 }
 
-impl LoopController {
-    fn new() -> Self {
-        let term = Term::stdout();
+pub fn validate_path(output: String) -> Result<PathBuf> {
+    let path = Path::new(&output);
 
-        term.write_line("Recording events from device, press ESC and Left-CTRL to save and exit")
-            .unwrap();
-
-        LoopController {
-            esc_keystate: false,
-            left_control_keystate: false,
-            term,
-        }
+    if path.exists() {
+        return Err(anyhow!("output file already exists"));
     }
-    fn should_exit(&mut self, event: InputEvent) -> Result<bool> {
-        if event.kind() == InputEventKind::Key(Key::KEY_ESC) {
-            if event.value() == 0 {
-                self.esc_keystate = false;
-            } else {
-                self.esc_keystate = true;
+
+    Ok(path.to_path_buf())
+}
+
+pub async fn listen_loop(tx: Sender<Msg>, device_path: String) -> Result<()> {
+    let term = Term::stdout();
+
+    // Create device
+    let device = Device::open(&device_path)?;
+    tx.send(Msg::Device(DeviceDescriptor::from(&device)))
+        .await?;
+
+    // Record Event Time
+    let now = SystemTime::now();
+
+    let mut event_index: u64 = 1;
+
+    let mut events = device.into_event_stream()?;
+    term.write_line("")?;
+    loop {
+        let ev = events.next_event().await?;
+
+        let desc = EventDescriptor::new(
+            ev.timestamp().duration_since(now)?.as_millis(),
+            ev.event_type().0,
+            ev.code(),
+            ev.value(),
+        );
+
+        tx.send(Msg::Event(desc.clone())).await?;
+        if ev.event_type().0 != 0 {
+            term.clear_last_lines(1)?;
+            term.write_line(&format!("{} Event: {:?}", event_index, desc))?;
+        }
+        event_index += 1;
+    }
+}
+
+pub async fn record_loop(mut rx: Receiver<Msg>, output: PathBuf) -> Result<()> {
+    let term = Term::stdout();
+    let mut device: Option<DeviceDescriptor> = None;
+    let mut events: Vec<EventDescriptor> = Vec::new();
+
+    // Make a File
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Msg::Exit => {
+                term.clear_last_lines(1)?;
+                term.write_line("Exit Command Received")?;
+                let rec = Recording {
+                    event_list: events,
+                    device: device.unwrap(),
+                };
+                write_to_file(output, rec).await?;
+                return Ok(());
+            }
+            Msg::Event(value) => {
+                // If verbose?
+                events.push(value);
+            }
+            Msg::Device(dev) => {
+                device = Some(dev);
             }
         }
-
-        if event.kind() == InputEventKind::Key(Key::KEY_LEFTCTRL) {
-            if event.value() == 0 {
-                self.left_control_keystate = false;
-            } else {
-                self.left_control_keystate = true;
-            }
-        }
-        self.term.clear_last_lines(1)?;
-        self.term.write_line(&format!(
-            "esc: {} left-ctrl: {}",
-            self.esc_keystate, self.left_control_keystate
-        ))?;
-
-        Ok(self.esc_keystate && self.left_control_keystate)
     }
+
+    Ok(())
+}
+
+pub async fn write_to_file(output: PathBuf, rec: Recording) -> Result<()> {
+    let term = Term::stdout();
+    term.write_line(format!("Writing to file: {:?}", output).as_str())?;
+    let json = serde_json::to_string(&rec)?;
+
+    let mut file = tokio::fs::File::create(output).await?;
+
+    file.write_all(json.as_bytes()).await?;
+    Ok(())
 }

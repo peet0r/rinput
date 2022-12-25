@@ -8,20 +8,11 @@ use crate::descriptor::Timeline;
 
 pub fn replay_timeline(device: &mut VirtualDevice, timeline: &Timeline) -> Result<()> {
     let values = &timeline.keyframes;
-    let mut i = 0;
-    let mut current = &values[i];
     let start = Instant::now();
 
-    loop {
-        let t = start.elapsed().as_micros();
-        if t > current.time {
-            current = &values[i];
-            device.emit(&current.events)?;
-            i += 1;
-            if i >= values.len() - 1 {
-                break;
-            }
-        }
+    for frame in values{
+        while start.elapsed().as_micros() > frame.time{}
+        device.emit(&frame.events)?;
     }
 
     Ok(())
