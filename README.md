@@ -1,6 +1,3 @@
-This will help you pete... run it from this projects root
-`docker run -it -v $(PWD):/home/rinput raspi-build`
+Warning this is basically spyware!
 
-CLI
-Listen Task
-Record Task
+This is used in testing wayland integrations in embedded systems.

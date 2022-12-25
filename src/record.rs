@@ -3,8 +3,8 @@ use crate::descriptor::{DeviceDescriptor, EventDescriptor, Recording};
 use anyhow::{anyhow, Result};
 use console::Term;
 use evdev::{enumerate, Device};
-use std::fs::File;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncWriteExt;
 
 use std::time::SystemTime;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -54,12 +54,6 @@ pub fn select_device() -> Result<String> {
 pub fn validate_path(output: String) -> Result<PathBuf> {
     let path = Path::new(&output);
 
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            return Err(anyhow!("output path is not valid"));
-        }
-    }
-
     if path.exists() {
         return Err(anyhow!("output file already exists"));
     }
@@ -72,14 +66,14 @@ pub async fn listen_loop(tx: Sender<Msg>, device_path: String) -> Result<()> {
 
     // Create device
     let device = Device::open(&device_path)?;
-    let d: DeviceDescriptor = device.into();
-    // tx.send(Msg::Device(device.into().clone()));
+    tx.send(Msg::Device(DeviceDescriptor::from(&device)))
+        .await?;
 
     // Record Event Time
     let now = SystemTime::now();
 
     let mut event_index: u64 = 1;
-    // TODO: Validate that this is correct Tokio async stream for events
+
     let mut events = device.into_event_stream()?;
     term.write_line("")?;
     loop {
@@ -93,8 +87,10 @@ pub async fn listen_loop(tx: Sender<Msg>, device_path: String) -> Result<()> {
         );
 
         tx.send(Msg::Event(desc.clone())).await?;
-        term.clear_last_lines(1)?;
-        term.write_line(&format!("{} Event: {:?}", event_index, desc))?;
+        if ev.event_type().0 != 0 {
+            term.clear_last_lines(1)?;
+            term.write_line(&format!("{} Event: {:?}", event_index, desc))?;
+        }
         event_index += 1;
     }
 }
@@ -105,37 +101,38 @@ pub async fn record_loop(mut rx: Receiver<Msg>, output: PathBuf) -> Result<()> {
     let mut events: Vec<EventDescriptor> = Vec::new();
 
     // Make a File
-    while let Some(i) = rx.recv().await {
-        match i {
+    while let Some(msg) = rx.recv().await {
+        match msg {
             Msg::Exit => {
+                term.clear_last_lines(1)?;
                 term.write_line("Exit Command Received")?;
                 let rec = Recording {
                     event_list: events,
                     device: device.unwrap(),
                 };
-                write_to_file(output, rec)?;
+                write_to_file(output, rec).await?;
                 return Ok(());
             }
             Msg::Event(value) => {
                 // If verbose?
-                term.write_line(&format!("Event: {:?}", value))?;
                 events.push(value);
             }
             Msg::Device(dev) => {
                 device = Some(dev);
             }
         }
-        // Wait for events and write them to file...?
     }
 
     Ok(())
 }
 
-pub fn write_to_file(output: PathBuf, rec: Recording) -> Result<()> {
+pub async fn write_to_file(output: PathBuf, rec: Recording) -> Result<()> {
     let term = Term::stdout();
     term.write_line(format!("Writing to file: {:?}", output).as_str())?;
-    let file = File::open(output)?;
-    serde_json::to_writer(file, &rec);
+    let json = serde_json::to_string(&rec)?;
 
+    let mut file = tokio::fs::File::create(output).await?;
+
+    file.write_all(json.as_bytes()).await?;
     Ok(())
 }

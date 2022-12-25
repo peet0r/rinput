@@ -11,15 +11,6 @@ pub struct Recording {
     pub event_list: Vec<EventDescriptor>,
 }
 
-impl Recording {
-    pub fn new(device: DeviceDescriptor) -> Self {
-        Recording {
-            device,
-            event_list: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventDescriptor {
     time: u128,

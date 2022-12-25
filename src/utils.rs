@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use evdev::Key;
 
+// Derived from linux input sys
 pub fn get_key_from_str(s: &str) -> Result<Key> {
     match s {
         "KEY_RESERVED" => Ok(Key::KEY_RESERVED),
