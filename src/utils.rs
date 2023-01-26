@@ -245,6 +245,7 @@ pub fn get_key_from_str(s: &str) -> Result<Key> {
         "KEY_BRIGHTNESS_CYCLE" => Ok(Key::KEY_BRIGHTNESS_CYCLE),
         "KEY_BRIGHTNESS_AUTO" => Ok(Key::KEY_BRIGHTNESS_AUTO),
         "KEY_DISPLAY_OFF" => Ok(Key::KEY_DISPLAY_OFF),
+        "KEY_WIMAX" => Ok(Key::KEY_WWAN),
         "KEY_WWAN" => Ok(Key::KEY_WWAN),
         "KEY_RFKILL" => Ok(Key::KEY_RFKILL),
         "KEY_MICMUTE" => Ok(Key::KEY_MICMUTE),
