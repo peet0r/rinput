@@ -18,6 +18,9 @@ use crate::replay::{replay_in_loop, replay_timeline};
 use cli::{Cli, Generate, RInputCommand, Record, Replay};
 use record::{enumerate_devices, listen_loop, record_loop, select_device, validate_path, Msg};
 
+const TIMING_OFFSET: f64 = 1.1;
+const MILLIS_TO_MICROS: f64 = 1.0;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
@@ -119,15 +122,17 @@ async fn process_generate(gen: Generate) -> Result<()> {
         event_list: Vec::new(),
     };
 
+    let mut delta = if gen.initialdelay < 1000 {1000} else { gen.initialdelay};
+
     for t in keys.iter().enumerate() {
-        let delta = gen.delta * (t.0 as u64 + 2);
+        delta += (gen.delta * (t.0 as u64)) as u128;
         let key = t.1;
         //Down
         rec.event_list
             .push(EventDescriptor::new(delta.into(), 1, key.0, 1));
         //Up
         rec.event_list.push(EventDescriptor::new(
-            (delta as f64 * 1.1).ceil() as u128,
+            (delta as f64 * TIMING_OFFSET * MILLIS_TO_MICROS).ceil() as u128,
             1,
             key.0,
             0,
