@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use anyhow::{Result};
+use anyhow::Result;
 use evdev::{
     uinput::{VirtualDevice, VirtualDeviceBuilder},
     AttributeSet, AttributeSetRef, Device, EvdevEnum, EventType, InputEvent, Key,
@@ -32,6 +32,7 @@ impl EventDescriptor {
     }
 }
 
+#[derive(Debug)]
 pub struct Keyframe {
     pub time: u128,
     pub events: Vec<InputEvent>,
@@ -39,7 +40,13 @@ pub struct Keyframe {
 
 impl std::fmt::Display for Keyframe {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(fmt, "time: {}, event[0] of {}: {:?}", self.time, self.events.len(), self.events[0])
+        write!(
+            fmt,
+            "time: {}, event[0] of {}: {:?}",
+            self.time,
+            self.events.len(),
+            self.events[0]
+        )
     }
 }
 
@@ -49,9 +56,11 @@ pub struct Timeline {
 
 impl Display for Timeline {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.keyframes.iter().fold(Ok(()), |result: std::fmt::Result, frame| {
-            result.and_then(|_| writeln!(fmt, "{}", frame))
-        }) 
+        self.keyframes
+            .iter()
+            .fold(Ok(()), |result: std::fmt::Result, frame| {
+                result.and_then(|_| writeln!(fmt, "{}", frame))
+            })
     }
 }
 
@@ -72,8 +81,6 @@ impl From<Vec<EventDescriptor>> for Timeline {
             t.keyframes.push(k);
         }
 
-        println!("{}",t);
-        
         t
     }
 }

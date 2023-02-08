@@ -71,8 +71,13 @@ pub struct Generate {
         help = "Send sequence on term input. if false, run once"
     )]
     pub sequence: bool,
-    #[arg(short, long, help = "Add initial delay prior to starting the sequence. minimum value is 1000. [milliseconds]", default_value_t = 1000)]
-    pub initialdelay: u128
+    #[arg(
+        short,
+        long,
+        help = "Add initial delay prior to starting the sequence. minimum value is 1000. [milliseconds]",
+        default_value_t = 1000
+    )]
+    pub initialdelay: u128,
 }
 
 // TODO: This should be a result

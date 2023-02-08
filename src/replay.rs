@@ -1,16 +1,16 @@
 use std::time::Instant;
 
 use anyhow::{Ok, Result};
-use console::{Term};
+use console::Term;
 use evdev::uinput::VirtualDevice;
 
-use crate::descriptor::{Timeline};
+use crate::descriptor::Timeline;
 
 pub fn replay_timeline(device: &mut VirtualDevice, timeline: &Timeline) -> Result<()> {
     let values = &timeline.keyframes;
     let start = Instant::now();
-    for frame in values{
-        while start.elapsed().as_micros() > frame.time{}
+    for frame in values {
+        while start.elapsed().as_millis() < frame.time {}
         device.emit(&frame.events)?;
     }
 
